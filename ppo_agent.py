@@ -28,7 +28,7 @@ class PPOAgent(BaseAgent):
         self.action_log_probs = []
         self.silent = self.cfg.silent
 
-        
+
     def update_policy(self):
         if not self.silent:
             print("Updating the policy...")
@@ -52,8 +52,8 @@ class PPOAgent(BaseAgent):
         self.action_log_probs = []
         if not self.silent:
             print("Updating finished!")
-            
-            
+
+
     def compute_returns(self):
         returns = []
         with torch.no_grad():
@@ -87,8 +87,8 @@ class PPOAgent(BaseAgent):
 
             # Drop the batch indices
             indices = [i for i in indices if i not in batch_indices]
-            
-            
+
+
     def ppo_update(self, states, actions, rewards, next_states, dones, old_log_probs, targets):
         action_dists, values = self.policy(states)
         values = values.squeeze()
@@ -132,7 +132,7 @@ class PPOAgent(BaseAgent):
         self.dones.append(torch.Tensor([done]))
         self.next_states.append(torch.from_numpy(next_state).float())
     
-        
+
     def train_iteration(self,ratio_of_episodes):
         # Run actual training        
         reward_sum, episode_length, num_updates = 0, 0, 0
@@ -170,7 +170,7 @@ class PPOAgent(BaseAgent):
         update_info = {'episode_length': episode_length,
                     'ep_reward': reward_sum}
         return update_info
-        
+
     def train(self):
         if self.cfg.save_logging: 
             L = cu.Logger() # create a simple logger to record stats
@@ -211,12 +211,12 @@ class PPOAgent(BaseAgent):
         train_time = (end-start)/60
         print("------Training finished.------")
         print(f'Total traning time is {train_time}mins')
-    
+
     def load_model(self):
         filepath=str(self.model_dir)+'/model_parameters_'+str(self.seed)+'.pt'
         state_dict = torch.load(filepath)
         self.policy.load_state_dict(state_dict)
-    
+
     def save_model(self):
         filepath=str(self.model_dir)+'/model_parameters_'+str(self.seed)+'.pt'
         torch.save(self.policy.state_dict(), filepath)
