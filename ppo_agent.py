@@ -10,7 +10,8 @@ class PPOAgent(BaseAgent):
     def __init__(self, config=None):
         super(PPOAgent, self).__init__(config)
         self.device = self.cfg.device  # ""cuda" if torch.cuda.is_available() else "cpu"
-        self.policy= Policy(self.observation_space_dim, self.action_space_dim, self.env)
+        self.policy = Policy(self.observation_space_dim, self.action_space_dim, self.env)
+        self.optimizer = torch.optim.Adam(self.policy.parameters(), lr=float(self.cfg.lr))
         self.lr=self.cfg.lr
 
         self.batch_size = self.cfg.batch_size
@@ -26,6 +27,7 @@ class PPOAgent(BaseAgent):
         self.dones = []
         self.action_log_probs = []
         self.silent = self.cfg.silent
+
 
     def update_policy(self):
         if not self.silent:
@@ -85,12 +87,12 @@ class PPOAgent(BaseAgent):
 
             # Drop the batch indices
             indices = [i for i in indices if i not in batch_indices]
-            
-            
+
+
     def ppo_update(self, states, actions, rewards, next_states, dones, old_log_probs, targets):
         action_dists, values = self.policy(states)
         values = values.squeeze()
-        new_action_probs = action_dists.log_prob(actions)
+        new_action_probs = action_dists.log_prob(actions).sum(axis=-1) 
         ratio = torch.exp(new_action_probs - old_log_probs)
         clipped_ratio = torch.clamp(ratio, 1-self.clip, 1+self.clip)
 
@@ -110,23 +112,27 @@ class PPOAgent(BaseAgent):
         loss.backward()
         self.optimizer.step()
 
-            
 
     def get_action(self, observation, evaluation=False):
         x = torch.from_numpy(observation).float().to(self.train_device)
         action_dist, _ = self.policy.forward(x)
         if evaluation:
-            action = action_dist.probs.argmax()
+            action = action_dist.mean
         else:
             action = action_dist.sample()
-        aprob = action_dist.log_prob(action)
-        action = action.item()
-        print(action)
-        print(aprob)
-        return action, aprob
+        aprob = action_dist.log_prob(action).sum(axis=-1) 
+        return action.detach().numpy(), aprob
 
 
-        
+    def store_outcome(self, state, action, next_state, reward, action_log_prob, done):
+        self.states.append(torch.from_numpy(state).float())
+        self.actions.append(torch.Tensor(action))
+        self.action_log_probs.append(action_log_prob.detach())
+        self.rewards.append(torch.Tensor([reward]).float())
+        self.dones.append(torch.Tensor([done]))
+        self.next_states.append(torch.from_numpy(next_state).float())
+    
+
     def train_iteration(self,ratio_of_episodes):
         # Run actual training        
         reward_sum, episode_length, num_updates = 0, 0, 0
@@ -157,13 +163,14 @@ class PPOAgent(BaseAgent):
                 num_updates += 1
 
                 # Update policy randomness
-                self.policy.set_logstd_ratio(ratio_of_episodes)
+                # Skip this for now, TODO!!
+                #self.policy.set_logstd_ratio(ratio_of_episodes)
 
         # Return stats of training
         update_info = {'episode_length': episode_length,
                     'ep_reward': reward_sum}
         return update_info
-        
+
     def train(self):
         if self.cfg.save_logging: 
             L = cu.Logger() # create a simple logger to record stats
@@ -204,12 +211,12 @@ class PPOAgent(BaseAgent):
         train_time = (end-start)/60
         print("------Training finished.------")
         print(f'Total traning time is {train_time}mins')
-    
+
     def load_model(self):
         filepath=str(self.model_dir)+'/model_parameters_'+str(self.seed)+'.pt'
         state_dict = torch.load(filepath)
         self.policy.load_state_dict(state_dict)
-    
+
     def save_model(self):
         filepath=str(self.model_dir)+'/model_parameters_'+str(self.seed)+'.pt'
         torch.save(self.policy.state_dict(), filepath)
