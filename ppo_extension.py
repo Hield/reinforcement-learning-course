@@ -7,12 +7,14 @@ import torch
 import numpy as np
 import torch.nn.functional as F
 import time
+from collections import deque
 
 class PPOExtension(PPOAgent):
     
     def __init__(self, config=None):
         super(PPOExtension, self).__init__(config)
-        self.sil_buffer = []
+        buffer_size = 20000
+        self.sil_buffer = deque(maxlen = buffer_size)
 
     def store_sil(self,states,actions,returns):
         self.sil_buffer.extend([(states[i], actions[i], returns[i]) for i in range(0, len(states))])
@@ -23,7 +25,7 @@ class PPOExtension(PPOAgent):
         if not self.sil_buffer:
             return 0.0  # do not add loss if sil buffer is empty
         
-        M=2
+        M=4
         sil_batch_size = 16
         
         
@@ -47,7 +49,7 @@ class PPOExtension(PPOAgent):
             sil_policy_loss = -torch.mean(log_probs * advantages)
             sil_loss_value = 0.5 * torch.mean(advantages ** 2)
             
-            beta_sil = 1
+            beta_sil = 0.1
             
             sil_loss = sil_policy_loss + beta_sil * sil_loss_value
             
