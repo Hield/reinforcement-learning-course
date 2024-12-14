@@ -12,7 +12,7 @@ from collections import namedtuple
 
 # Hyperparameters
 BUFFER_SIZE = 5000
-BUFFER_PRIORITY_DECAY = 0.99
+BUFFER_PRIORITY_DECAY = 0.98
 BUFFER_BATCH_SIZE = 32
 BUFFER_ALPHA = 0.6
 BUFFER_BETA = 0.1
@@ -98,12 +98,50 @@ class PPOExtension(PPOAgent):
     def __init__(self, config=None):
         super(PPOExtension, self).__init__(config)
         self.sil_buffer = ReplayBuffer(self.observation_space_dim, self.action_space_dim)
+        self.ratio_of_episodes = 1
 
     def store_sil(self, states, actions, returns):
         for i in range(len(states)):
             self.sil_buffer.add(states[i], actions[i], returns[i])
 
+    
+    def sil_update(self):
+        M=1
+        
+        for _ in range(M):
+            # beta goes from 0.1 to 1
+            beta = 0.1 + (1 - self.ratio_of_episodes) * 0.9
+            sil_batch, sil_indices, sil_weights = self.sil_buffer.sample(beta=beta)
+        
+            sil_states = sil_batch.state
+            sil_actions = sil_batch.action
+            sil_returns = sil_batch.retur
 
+            sil_action_dists, sil_values = self.policy(sil_states)
+            sil_values = sil_values.squeeze()
+
+            # Calculate raw SIL advantages for updating priorities
+            sil_advantages = sil_returns - sil_values
+            sil_advantages = torch.clamp(sil_advantages, min=0)
+
+             # Detach here not to involve value gradient
+            detached_sil_advantages = sil_advantages.detach()
+
+            # Update priorities in the buffer (use SIL advantages after clamping since we don't want worse values)
+            self.sil_buffer.update_priorities(sil_indices, detached_sil_advantages.numpy())
+            sil_log_probs = sil_action_dists.log_prob(sil_actions).sum(axis=-1)
+
+            # Scale by importance-sampling weights
+            sil_policy_loss = -torch.mean(sil_log_probs * detached_sil_advantages * sil_weights) 
+            sil_value_loss = 0.5 * torch.mean(sil_advantages ** 2 * sil_weights)
+            
+            sil_loss = sil_policy_loss + 0.01 * sil_value_loss
+            self.optimizer.zero_grad()
+            sil_loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.policy.parameters(), max_norm=1.5)
+            self.optimizer.step()
+    
+            
     # old functions
     def ppo_update(self, states, actions, rewards, next_states, dones, old_log_probs, targets):
         # Calculate PPO loss
@@ -132,7 +170,7 @@ class PPOExtension(PPOAgent):
 
         entropy = action_dists.entropy().mean()
         ppo_loss = policy_objective + 0.5*value_loss - 0.01*entropy
-
+        '''
         # Calculate SIL loss
         sil_batch, sil_indices, sil_weights = self.sil_buffer.sample()
         
@@ -159,8 +197,9 @@ class PPOExtension(PPOAgent):
         sil_value_loss = 0.5 * torch.mean(sil_advantages ** 2 * sil_weights)
         sil_loss = sil_policy_loss + 0.01 * sil_value_loss
 
+        '''
+        loss = ppo_loss #+ SIL_LOSS_WEIGHT * sil_loss
         
-        loss = ppo_loss + SIL_LOSS_WEIGHT * sil_loss
         self.optimizer.zero_grad()
         loss.backward()
         torch.nn.utils.clip_grad_norm_(self.policy.parameters(), max_norm=1.5)
@@ -185,5 +224,12 @@ class PPOExtension(PPOAgent):
                 self.dones[batch_indices], self.action_log_probs[batch_indices],
                 returns[batch_indices])
             
+            self.sil_update()
             # Drop the batch indices
             indices = [i for i in indices if i not in batch_indices]
+            
+    
+    def train_iteration(self, ratio_of_episodes):
+        self.ratio_of_episodes = ratio_of_episodes
+        update_info = super().train_iteration(ratio_of_episodes)
+        return update_info
